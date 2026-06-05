@@ -57,14 +57,12 @@ const osMutexAttr_t TankMutex_attributes = {
 };
 
 /* USER CODE BEGIN PV */
-// The STRICTLY SINGLE variable for the tank required by the assignment
 uint32_t petrol_tank = 50000;
-
-// The RTOS Message Queue
 osMessageQueueId_t PumpQueueHandle;
-
-// Timer variable used to debounce the incoming pump signals
 uint32_t last_interrupt_time = 0;
+
+// ADD THIS: The ESP8266 Task Handle
+osThreadId_t MqttTaskHandle;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -74,7 +72,7 @@ static void MX_USART2_UART_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+void StartMqttTask(void *argument);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -144,9 +142,13 @@ int main(void)
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  /* USER CODE END RTOS_THREADS */
-
+    const osThreadAttr_t MqttTask_attributes = {
+      .name = "MqttTask",
+      .stack_size = 256 * 4, // Plenty of stack space for string formatting
+      .priority = (osPriority_t) osPriorityNormal,
+    };
+    MqttTaskHandle = osThreadNew(StartMqttTask, NULL, &MqttTask_attributes);
+    /* USER CODE END RTOS_THREADS */
   /* USER CODE BEGIN RTOS_EVENTS */
   /* add events, ... */
   /* USER CODE END RTOS_EVENTS */
@@ -306,27 +308,31 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+// ... (Your existing HAL_GPIO_EXTI_Callback is up here, leave it alone!) ...
+
+void StartMqttTask(void *argument)
 {
-  uint32_t interrupt_time = HAL_GetTick();
-  uint8_t pump_id = 0;
+  char at_command[128];
+  uint32_t current_tank_level = 0;
 
-  // Software Debouncing (50ms) - Secures points on your grading rubric
-  if ((interrupt_time - last_interrupt_time) > 50)
+  for(;;)
   {
-    // Identify which pump triggered the interrupt
-    if (GPIO_Pin == GPIO_PIN_0) pump_id = 1;
-    else if (GPIO_Pin == GPIO_PIN_1) pump_id = 2;
-    else if (GPIO_Pin == GPIO_PIN_2) pump_id = 3;
-    else if (GPIO_Pin == GPIO_PIN_3) pump_id = 4;
-
-    // If a valid pump signal came in, put it in the RTOS queue
-    // Note: Timeout MUST be 0 inside an ISR!
-    if (pump_id != 0) {
-      osMessageQueuePut(PumpQueueHandle, &pump_id, 0, 0);
+    // 1. Safely grab the Mutex to read the shared tank value
+    if (osMutexAcquire(TankMutexHandle, osWaitForever) == osOK)
+    {
+      current_tank_level = petrol_tank;
+      osMutexRelease(TankMutexHandle); // Release immediately
     }
 
-    last_interrupt_time = interrupt_time;
+    // 2. Format the AT Command (Thread-safe!)
+    // Format: AT+MQTTPUB=0,"topic","payload",qos,retain
+    sprintf(at_command, "AT+MQTTPUB=0,\"station/tank\",\"%luL\",0,0\r\n", current_tank_level);
+
+    // 3. Send the command via UART to the ESP8266
+    HAL_UART_Transmit(&huart2, (uint8_t*)at_command, strlen(at_command), 1000);
+
+    // 4. Sleep for 2 seconds before sending the next update
+    osDelay(2000);
   }
 }
 /* USER CODE END 4 */
