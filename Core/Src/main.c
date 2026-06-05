@@ -60,9 +60,12 @@ const osMutexAttr_t TankMutex_attributes = {
 uint32_t petrol_tank = 50000;
 osMessageQueueId_t PumpQueueHandle;
 uint32_t last_interrupt_time = 0;
-
-// ADD THIS: The ESP8266 Task Handle
 osThreadId_t MqttTaskHandle;
+
+// ADD THESE: DoE Variables for timing the ISR
+uint32_t isr_start_time = 0;
+uint32_t isr_end_time = 0;
+uint32_t isr_execution_cycles = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -110,8 +113,12 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
-  /* USER CODE BEGIN 2 */
 
+  /* USER CODE BEGIN 2 */
+  // Enable the DWT Cycle Counter for precise hardware measurements
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -308,8 +315,12 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// ... (Your existing HAL_GPIO_EXTI_Callback is up here, leave it alone!) ...
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  // ... (Your existing DoE and Interrupt code is here, leave it alone!) ...
+}
 
+// PASTE THIS MISSING FUNCTION RIGHT HERE:
 void StartMqttTask(void *argument)
 {
   char at_command[128];
@@ -325,7 +336,6 @@ void StartMqttTask(void *argument)
     }
 
     // 2. Format the AT Command (Thread-safe!)
-    // Format: AT+MQTTPUB=0,"topic","payload",qos,retain
     sprintf(at_command, "AT+MQTTPUB=0,\"station/tank\",\"%luL\",0,0\r\n", current_tank_level);
 
     // 3. Send the command via UART to the ESP8266
